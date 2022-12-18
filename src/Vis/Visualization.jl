@@ -59,7 +59,7 @@ end
 # the second case draws the object in an existing scene, draw!(obj) can also be used to draw the object in the current scene
 
 global current_main_scene = nothing
-global current_layout_scene = nothing
+global current_fig = nothing
 global current_3d_scene = nothing
 global current_mode = nothing           # modes:    nothing, :default  -> Original Vis behavior    
                                         #           :pluto             -> support pluto notebooks 
@@ -92,24 +92,28 @@ function scene(resolution = (1000, 1000))
     # possible fix for fixing layoutscene no longer existing in Makie. Many other changes appear to be necessary 
     # in addition to this. the call to Makie.LScene errors and when fixed the call to Makie.Button errors. Looks like 
     # a lot of work.
-    # fig = Makie.Figure(resolution=resolution)
-    # lscene = Makie.LScene(fig[1, 1])
+    fig = Makie.Figure(resolution=resolution)
+    lscene = Makie.LScene(fig[1, 1])
 
-    scene, layout = Makie.layoutscene(resolution = resolution)
-    global current_main_scene = scene
-    global current_layout_scene = layout
-    lscene = layout[1, 1] = Makie.LScene(scene, scenekw = (camera = Makie.cam3d_cad!, axis_type = Makie.axis3d!, raw = false))
+    Makie.colsize!(fig.layout, 1, Makie.Relative(1))
+    Makie.rowsize!(fig.layout, 1, Makie.Relative(1))
+
+    # scene, layout = Makie.layoutscene(resolution = resolution)
+    # global current_main_scene = scene
+    global current_fig = fig
+    # lscene = layout[1, 1] = Makie.LScene(scene, scenekw = (camera = Makie.cam3d_cad!, axis_type = Makie.axis3d!, raw = false))
     global current_3d_scene = lscene
 
     # in these modes we want to skip the creation of the utility buttons as these modes are not interactive
     if (get_current_mode() == :pluto || get_current_mode() == :docs)
-        return scene, lscene
+        return fig, lscene
     end
-
-    threedbutton = Makie.Button(scene, label = "3D", buttoncolor = RGB(0.8, 0.8, 0.8), height = 40, width = 80)
-    twodxbutton = Makie.Button(scene, label = "2D-x", buttoncolor = RGB(0.8, 0.8, 0.8), height = 40, width = 80)
-    twodybutton = Makie.Button(scene, label = "2D-y", buttoncolor = RGB(0.8, 0.8, 0.8), height = 40, width = 80)
-    savebutton = Makie.Button(scene, label = "Screenshot", buttoncolor = RGB(0.8, 0.8, 0.8), height = 40, width = 160)
+    
+    button_grid = fig[2, 1] = Makie.GridLayout()
+    button_grid[1,1] = threedbutton = Makie.Button(fig, label = "3D", buttoncolor = RGB(0.8, 0.8, 0.8), height = 40, width = 80)
+    button_grid[1,2] = twodxbutton = Makie.Button(fig, label = "2D-x", buttoncolor = RGB(0.8, 0.8, 0.8), height = 40, width = 80)
+    button_grid[1,3] = twodybutton = Makie.Button(fig, label = "2D-y", buttoncolor = RGB(0.8, 0.8, 0.8), height = 40, width = 80)
+    button_grid[1,4] = savebutton = Makie.Button(fig, label = "Screenshot", buttoncolor = RGB(0.8, 0.8, 0.8), height = 40, width = 160)
 
     Makie.on(threedbutton.clicks) do nclicks
         make3d(lscene)
@@ -131,14 +135,14 @@ function scene(resolution = (1000, 1000))
         yield()
     end
 
-    layout[2, 1] = Makie.grid!(hcat(threedbutton, twodxbutton, twodybutton, savebutton), tellwidth = false, tellheight = true)
-    return scene, lscene
+    # Makie.grid!(hcat(threedbutton, twodxbutton, twodybutton, savebutton), tellwidth = false, tellheight = true)
+    return fig, lscene
 end
 
 function make3d(scene::Makie.LScene = current_3d_scene)
     s = scene.scene
     # use 3d camera
-    Makie.cam3d_cad!(s)
+    cam = Makie.cam3d_cad!(s)
     # reset scene rotation
     s.transformation.rotation[] = Makie.Quaternion(0.0, 0.0, 0.0, 1.0)
     # show all the axis ticks
@@ -150,14 +154,16 @@ function make3d(scene::Makie.LScene = current_3d_scene)
     s[Makie.OldAxis].attributes.ticks.align = ((:left, :center), (:right, :center), (:right, :center))
     s[Makie.OldAxis].attributes.names.align = ((:left, :center), (:right, :center), (:right, :center))
     # reset scene limits to automatic
-    s.limits[] = Makie.Automatic()
-    Makie.update!(s)
+    o, w = Makie.origin(Makie.data_limits(s)), Makie.widths(Makie.data_limits(s))
+    limits = Makie.Rect3f((o[1], o[2], o[3]), (w[1], w[2], w[3]))
+    cam = Makie.update_cam!(s, cam, limits)
+    # Makie.update!(s)
 end
 
 function make2dy(scene::Makie.LScene = current_3d_scene)
     s = scene.scene
     # use 2d camera
-    Makie.cam2d!(s)
+    cam = Makie.cam2d!(s)
 
     scene_transform = Makie.qrotation(SVector{3, Float64}(0, 1, 0), 0.5pi)
     scene_transform_inv = Makie.qrotation(SVector{3, Float64}(0, 1, 0), -0.5pi)    # to use with the ticks and names
@@ -168,7 +174,7 @@ function make2dy(scene::Makie.LScene = current_3d_scene)
 
     # there is a bug in Makie 0.14.2 which causes an exception setting the X showticks to false. 
     # we work around it by making sure the labels we want to turn off are orthogonal to the view direction 
-    # s[Makie.OldAxis].attributes.showticks[] = (false, true, true)
+    s[Makie.OldAxis].attributes.showticks[] = (false, true, true)
     s[Makie.OldAxis].attributes.showticks[] = (true, true, true)
 
     # set tick and axis label rotation and position
@@ -177,20 +183,20 @@ function make2dy(scene::Makie.LScene = current_3d_scene)
     s[Makie.OldAxis].attributes.ticks.align = ((:right, :center), (:right, :center), (:center, :right))
     s[Makie.OldAxis].attributes.names.align = ((:left, :center), (:left, :center), (:center, :left))
     # update the scene limits automatically to get true reference values
-    s.limits[] = Makie.Automatic()
-    Makie.update_limits!(s)
+    # s.limits[] = Makie.Automatic()
+    # Makie.update_limits!(s)
     # manually set the scene limits to draw the axes correctly
-    o, w = Makie.origin(s.data_limits[]), Makie.widths(s.data_limits[])
-    s.limits[] = Makie.FRect3D((1000.0f0, o[2], o[3]), (w[2], w[2], w[3]))
+    o, w = Makie.origin(Makie.data_limits(s)), Makie.widths(Makie.data_limits(s))
+    limits = Makie.Rect2f((o[2], o[3]), (w[2], w[3]))
     # set the eye (i.e. light) position to behind the camera
-    s.camera.eyeposition[] = (0, 0, -100)
-    Makie.update!(s)
+    s.camera.eyeposition[] = (0, -100, 0)
+    Makie.update_cam!(s, cam, limits)
 end
 
 function make2dx(scene::Makie.LScene = current_3d_scene)
     s = scene.scene
     # use 2d camera
-    Makie.cam2d!(s)
+    cam = Makie.cam2d!(s)
 
     scene_transform= Makie.qrotation(SVector{3, Float64}(0, 0, 1), 0.5pi) * Makie.qrotation(SVector{3, Float64}(1, 0, 0), 0.5pi)
     scene_transform_inv=Makie.qrotation(SVector{3, Float64}(1, 0, 0), -0.5pi) * Makie.qrotation(SVector{3, Float64}(0, 0, 1), -0.5pi) 
@@ -209,14 +215,14 @@ function make2dx(scene::Makie.LScene = current_3d_scene)
     s[Makie.OldAxis].attributes.ticks.align = ((:right, :center), (:right, :center), (:center, :center))
     s[Makie.OldAxis].attributes.names.align = ((:left, :center), (:right, :center), (:center, :center))
     # update the scene limits automatically to get true reference values
-    s.limits[] = Makie.Automatic()
-    Makie.update_limits!(s)
+    # s.limits[] = Makie.Automatic()
+    # Makie.update_limits!(s)
     # manually set the scene limits to draw the axes correctly
-    o, w = Makie.origin(s.data_limits[]), Makie.widths(s.data_limits[])
-    s.limits[] = Makie.FRect3D((o[1], -1000.0f0, o[3]), (w[1], w[1], w[3]))
+    o, w = Makie.origin(Makie.data_limits(s)), Makie.widths(Makie.data_limits(s))
+    limits = Makie.Rect2f((o[2], o[3]), (w[2], w[3]))
     # set the eye (i.e. light) position to behind the camera
     s.camera.eyeposition[] = (0, 0, -100)
-    Makie.update!(s)
+    Makie.update_cam!(s, cam, limits)
 end
 
 """
